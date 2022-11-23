@@ -1,8 +1,4 @@
-/*
- * Loader Implementation
- *
- * 2018, Operating Systems
- */
+// SPDX-License-Identifier: GPL-2.0+
 
 #include <stdio.h>
 #include <string.h>
@@ -16,6 +12,7 @@
 
 #include "exec_parser.h"
 #include "loader.h"
+#include "utils.h"
 
 static so_exec_t *exec;
 static int exec_fd;
@@ -29,9 +26,8 @@ int find_segment(void *addr)
 	for (unsigned int curr_segm = 0; curr_segm < exec->segments_no; curr_segm++) {
 		so_seg_t segm = exec->segments[curr_segm];
 
-		if ((uintptr_t)addr >= segm.vaddr && (uintptr_t)addr < segm.vaddr + segm.mem_size) {
+		if ((uintptr_t)addr >= segm.vaddr && (uintptr_t)addr < segm.vaddr + segm.mem_size)
 			return curr_segm;
-		}
 	}
 
 	return -1;
@@ -57,30 +53,33 @@ void sigsegv_handler(int signum, siginfo_t *info, void *ucontext)
 
 	so_seg_t segm = exec->segments[curr_segm];
 
-	unsigned int page_in_segment = ((int)info->si_addr - (int)segm.vaddr) / PAGE_SIZE;
-	unsigned int offset_inside_segment = page_in_segment * PAGE_SIZE;
+	// Get page size for the current configuration
+	unsigned int page_size = sysconf(_SC_PAGE_SIZE);
+
+	unsigned int page_in_segment = ((uintptr_t)info->si_addr - (uintptr_t)segm.vaddr) / page_size;
+	unsigned int offset_inside_segment = page_in_segment * page_size;
 
 	// Map new page in memory
 	void *mapping;
-	
+
 	if (offset_inside_segment < segm.file_size) {
 		// The current segment position has data
-		mapping = mmap((char *)segm.vaddr + offset_inside_segment, PAGE_SIZE,
-	 					segm.perm, MAP_FIXED | MAP_PRIVATE, exec_fd, segm.offset + offset_inside_segment);
-		if (segm.file_size < segm.mem_size && segm.file_size - offset_inside_segment < PAGE_SIZE) {
-			// There is not a full page of data so the rest is zeroed out
-			memset(segm.vaddr + offset_inside_segment + segm.file_size % PAGE_SIZE, 0, PAGE_SIZE - segm.file_size % PAGE_SIZE);
+		mapping = mmap((void *)(segm.vaddr + offset_inside_segment), page_size, segm.perm,
+					   MAP_FIXED | MAP_PRIVATE, exec_fd, segm.offset + offset_inside_segment);
+
+		DIE(mapping == MAP_FAILED, "Mapping failed in handler");
+
+		// Not a full page of data so the rest is zeroed out
+		if (segm.file_size < segm.mem_size && segm.file_size - offset_inside_segment < page_size) {
+			memset((void *)(segm.vaddr + offset_inside_segment + segm.file_size % page_size),
+				   0, page_size - segm.file_size % page_size);
 		}
 	} else {
-		// The area is .bss, must be zeroed completely
-		mapping = mmap((char *)segm.vaddr + offset_inside_segment, PAGE_SIZE, 
-								segm.perm, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	}
+		// The area must be zeroed completely
+		mapping = mmap((void *)(segm.vaddr + offset_inside_segment), page_size, segm.perm,
+					   MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
-
-	if (mapping == MAP_FAILED) {
-		perror("Mapping failed");
-		exit(-1);
+		DIE(mapping == MAP_FAILED, "Mapping failed in handler");
 	}
 }
 
@@ -88,23 +87,23 @@ int so_init_loader(void)
 {
 	// handler
 	memset(&action, 0, sizeof(action));
-	action.sa_flags = SA_SIGINFO | SA_RESETHAND;
+	action.sa_flags = SA_SIGINFO;
 	action.sa_sigaction = sigsegv_handler;
-	if (sigaction(SIGSEGV, &action, &old_action)) {
-		perror("Failed sigaction\n");
-		exit(-1);
-	}
-
+	DIE(sigaction(SIGSEGV, &action, &old_action), "Failed sigaction");
 	return 0;
 }
 
 int so_execute(char *path, char *argv[])
 {
 	exec_fd = open(path, O_RDONLY);
+
+	DIE(exec_fd == -1, "Failed open");
+
 	exec = so_parse_exec(path);
 	if (!exec)
 		return -1;
 
 	so_start_exec(exec, argv);
+	close(exec_fd);
 	return -1;
 }

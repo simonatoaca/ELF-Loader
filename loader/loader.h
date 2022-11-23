@@ -17,9 +17,6 @@
 #define FUNC_DECL_PREFIX
 #endif /* _WIN32 */
 
-#define PAGE_SIZE sysconf(_SC_PAGE_SIZE)
-
-
 FUNC_DECL_PREFIX int so_init_loader(void);
 FUNC_DECL_PREFIX int so_execute(char *path, char *argv[]);
 
